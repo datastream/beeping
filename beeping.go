@@ -2,9 +2,10 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"github.com/gin-gonic/gin"
-	"github.com/oschwald/geoip2-golang"
 	"github.com/tcnksm/go-httpstat"
 	"io/ioutil"
 	"log"
@@ -18,7 +19,6 @@ import (
 
 var VERSION = "0.3.0"
 var MESSAGE = "BeePing instance - HTTP Ping as a Service (github.com/yanc0/beeping)"
-var geodatfile *string
 var instance *string
 
 type PMB struct {
@@ -45,6 +45,27 @@ type Geo struct {
 	Country string `json:"country"`
 	City    string `json:"city,omitempty"`
 	IP      string `json:"ip"`
+}
+
+type TbGeo struct {
+	Code int       `json:"code"`
+	Data TbGeoData `json:"data,omitempty"`
+}
+
+type TbGeoData struct {
+	IP        string `json:"ip,omitempty"`
+	Country   string `json:"country,omitempty"`
+	Area      string `json:"area,omitempty"`
+	Region    string `json:"region,omitempty"`
+	City      string `json:"city,omitempty"`
+	County    string `json:"county,omitempty"`
+	ISP       string `json:"isp,omitempty"`
+	CountryID string `json:"country_id,omitempty"`
+	AreaID    string `json:"area_id,omitempty"`
+	RegionID  string `json:"region_id,omitempty"`
+	CityID    string `json:"city_id,omitempty"`
+	CountyID  string `json:"county_id,omitempty"`
+	ISPID     string `json:"isp_id,omitempty"`
 }
 
 // Response defines the response to bring back
@@ -81,7 +102,6 @@ func NewCheck() *Check {
 }
 
 func main() {
-	geodatfile = flag.String("geodatfile", "/opt/GeoIP/GeoLite2-City.mmdb", "geoIP database path")
 	instance = flag.String("instance", "", "beeping instance name (default instance_name)")
 	flag.Parse()
 
@@ -195,7 +215,7 @@ func CheckHTTP(check *Check) (*Response, error) {
 		log.Println(err.Error())
 	}
 
-	_ = geoIPCountry(*geodatfile, ip, response)
+	_ = geoIPCountry(ip, response)
 
 	err = instanceName(*instance, response)
 	if err != nil {
@@ -209,24 +229,23 @@ func Milliseconds(d time.Duration) int64 {
 	return d.Nanoseconds() / 1000 / 1000
 }
 
-func geoIPCountry(geodatabase string, ip string, response *Response) error {
-	db, err := geoip2.Open(*geodatfile)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	// If you are using strings that may be invalid, check that ip is not nil
-	ipParse := net.ParseIP(ip)
-	record, err := db.City(ipParse)
-	if err != nil {
-		return err
+func geoIPCountry(ip string, response *Response) error {
+	client := http.Client{}
+	resp, err := client.Get(fmt.Sprintf("http://ip.taobao.com/service/getIpInfo.php?ip=%s", ip))
+	var record TbGeo
+	if err == nil {
+		if resp.StatusCode != 200 {
+			log.Printf("unsuccessfull return %s\n", resp.Status)
+		}
+		err = json.NewDecoder(resp.Body).Decode(&record)
 	}
 	response.Geo = &Geo{}
-	response.Geo.Country = record.Country.IsoCode
-	response.Geo.IP = ip
-	if record.Country.Names != nil {
-		response.Geo.City = record.City.Names["en-EN"]
+	if record.Code == 1 {
+		return nil
 	}
+	response.Geo.Country = record.Data.Country
+	response.Geo.IP = ip
+	response.Geo.City = record.Data.City
 	return nil
 }
 
